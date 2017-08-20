@@ -131,27 +131,32 @@ def import_files(filenames):
 
 
 def add_metadata_to_imported_file(m):
-    addmdcmd = "git -c annex.alwayscommit=false annex metadata \"{fname}\" -s {kvstr} --quiet"
+    addmdcmd = "git -c annex.alwayscommit=false annex metadata \"{fname}\" {kvstr} --quiet"
+    kvstr = ""
 
     for k,v in m.items():
 
         if k not in WANTED_KEYS:
             continue
 
-        key = k.split(" ")[-1]
+        key = str(k.split(" ")[-1])
+        value = str(v)
+        if key == "SourceFile":
+            value = os.path.basename(v)
 
-        try:
-            fn = m["filename_for_git_annex"]
-            kvstr = quote("{key}={value}".format(key=str(key), value=str(v)))
-            cmd = addmdcmd.format(fname=fn, kvstr=kvstr)
-            logging.debug("\t - " + cmd)
-            out = subprocess.check_output(cmd, shell=True,
-                                          stderr=subprocess.STDOUT,
-                                          env=os.environ) # TODO: hack for PATH
-        except subprocess.CalledProcessError as e:
-            logging.error("error in add_metadata_to_imported_file:"
-                  "{code}\noutput:\n{output}".format(code=e.returncode, output=e.output))
-            return False
+        kvstr += " -s " + quote("{key}={value}".format(key=key, value=value))
+
+    try:
+        fn = m["filename_for_git_annex"]
+        cmd = addmdcmd.format(fname=fn, kvstr=kvstr)
+        logging.debug("\t - " + cmd)
+        out = subprocess.check_output(cmd, shell=True,
+                                      stderr=subprocess.STDOUT,
+                                      env=os.environ) # TODO: hack for PATH
+    except subprocess.CalledProcessError as e:
+        logging.error("error in add_metadata_to_imported_file:"
+              "{code}\noutput:\n{output}".format(code=e.returncode, output=e.output))
+        return False
 
 # NOTE: DmsToDecimal and GetGps are from
 # https://developers.google.com/kml/articles/geotagsimple, and as per
