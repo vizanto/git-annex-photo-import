@@ -41,7 +41,7 @@ def show_status(at, total, extra=""):
 
     pct = float(at) / total
     numbers = "{} of {}: ".format(at, total)
-    remaining = int(COLS) - len(numbers) - len(extra) - 1
+    remaining = int(COLS) - len(numbers) - len(extra) - 2
     prog = "=" * (int(pct * remaining) )
     space = " " * int((1.0 - pct) * remaining)
     bar = "[{}{}]".format(prog, space)
@@ -50,15 +50,17 @@ def show_status(at, total, extra=""):
 
 
 def setup_logging(echo_to_stderr=False):
-    logging.basicConfig(filename='git-annex-photo-import.log', level=logging.INFO)
+    logging.basicConfig(filename='git-annex-photo-import.log', level=logging.DEBUG)
     if echo_to_stderr:
-        logging.getLogger('').addHandler(logging.StreamHandler())
+        console = logging.StreamHandler()
+        console.setLevel(logging.INFO)
+        logging.getLogger('').addHandler(console)
 
 
 def timestruct_from_metadata(m):
     if CREATION_DATE_KEY not in m:
         sourcefilename = m["SourceFile"]
-        logging.info("no EXIF creation date for {}, using mtime.".format(sourcefilename))
+        logging.debug("no EXIF creation date for {}, using mtime.".format(sourcefilename))
         st = os.stat(sourcefilename)
         timestruct = time.localtime(st.st_mtime)
         # NOTE: os x ctime seems odd so I go with mtime, which is what the Finder reports as "created" anyway
@@ -100,19 +102,18 @@ def import_files(filenames):
     skip_count = 0
     for filename in filenames:
         try:
-            logging.info("importing {}".format(filename))
             cmd = "git-annex import '{}'".format(filename)
             out = subprocess.check_output(cmd, shell=True,
                                           stderr=subprocess.STDOUT,
                                           env=os.environ) # TODO: hack for PATH
             import_count += 1
-            logging.info("- success")
+            logging.debug("importing {}".format(filename))
             if opts.verbose:
                 show_status(import_count, len(filenames), " ({} skips)".format(skip_count))
 
         except subprocess.CalledProcessError as e:
             if e.returncode == 1 and "not overwriting existing" in e.output:
-                logging.warn("- skipping existing file.")
+                logging.debug("- skipping existing file.")
                 skip_count += 1
             else:
                 logging.error("error in import: {code}\noutput:\n{output}".format(code=e.returncode, output=e.output))
@@ -215,22 +216,23 @@ UNKNOWN_PLACE_DICT = {"Formatted Address": "unknown",
 def place_info_from_metadata(m):
     gps = GetGps(m)
     if gps is None:
-        logging.info("no lat, lng for file {}, using 'unknown'".format(m["SourceFile"]))
+        logging.debug("no lat, lng for file {}, using 'unknown'".format(m["SourceFile"]))
         return UNKNOWN_PLACE_DICT
 
     lat, lng, alt = gps
     if "unknown" in [lat, lng]:
-        logging.info("no lat, lng for file {}, using 'unknown'".format(m["SourceFile"]))
+        logging.debug("no lat, lng for file {}, using 'unknown'".format(m["SourceFile"]))
         return UNKNOWN_PLACE_DICT
 
     ut = "http://maps.googleapis.com/maps/api/geocode/json?latlng={lat},{lng}&sensor=false"
     url = ut.format(lat=lat, lng=lng)
 
+    logging.info("\nRequest: " + url)
     response = urlopen(url)
     data = json.load(response)
 
     if data['status'] != 'OK':
-        logging.debug("error in geocoding: " + str(data))
+        logging.info("error in geocoding: " + str(data))
         return {}
 
     # for now, just get most specific result and use its address components:
@@ -333,14 +335,14 @@ def main(opts):
     logging.info("Received {} filenames as arguments. Getting metadata.".format(len(fnargs)))
     #mlist = get_metadata_using_exiftool(fnargs)
     mlist = get_metadata_using_exifread(fnargs, opts)
-    logging.info("Got metadata for {} filenames, copying.".format(len(mlist)))
+    logging.info("\nGot metadata for {} filenames.".format(len(mlist)))
 
     for m in mlist:
         try:
             m["filename_for_git_annex"] = filename_from_metadata(m)
         except Exception as e:
             source_file_name = m['SourceFile']
-            logging.exception("error getting filename from metadata for source_file_name={}".format(source_file_name)) 
+            logging.exception("error getting filename from metadata for source_file_name={}".format(source_file_name))
             pprint.pprint(m)
             raise e
 
@@ -366,14 +368,14 @@ def main(opts):
             show_status(moved_count, len(mlist), infostr)
         files_to_import.append(filename_for_git_annex)
 
-    logging.info("About to import {} files".format(len(files_to_import)))
+    logging.info("\nAbout to import {} files".format(len(files_to_import)))
     success = import_files(files_to_import)
     if success == False:
         # todo: remove temp dir?
         logging.error("errors importing files. exiting.")
         sys.exit()
 
-    logging.info("Updating metadata")
+    logging.info("\nUpdating metadata")
     updated_count = 0
     for m in mlist:
         ts = timestruct_from_metadata(m)
@@ -394,6 +396,8 @@ def main(opts):
     if staging_dir != "":
         logging.debug("removing {}".format(staging_dir))
         shutil.rmtree(staging_dir)
+
+    logging.info("\nDone!")
 
 #TODO - commit at end
 # TODO: exifread doesn't do MOV :(
