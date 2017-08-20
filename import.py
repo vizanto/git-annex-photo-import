@@ -21,7 +21,7 @@ from urllib.request import urlopen
 #TODO py3.3 uses shlex.quote
 from pipes import quote
 
-USE_STAGING = True # True means copy then import the copy, avoids deleting the original
+USE_STAGING = False # True # True means copy then import the copy, avoids deleting the original
 
 WANTED_KEYS_EXIFTOOL = ['CreateDate', 'GPSLongitude', 'GPSLongitudeRef', 'GPSLatitude', 'GPSLatitudeRef', 'ImageDescription', 'Model', 'Year', 'Month', 'Day', 'SourceFile', 'GPSImgDirection', 'GPSImgDirectionRef', 'GPSAltitude', 'GPSAltitudeRef']
 # for reference while hacking:
@@ -57,9 +57,8 @@ def setup_logging(echo_to_stderr=False):
         logging.getLogger('').addHandler(console)
 
 
-def timestruct_from_metadata(m):
+def timestruct_from_metadata(m, sourcefilename):
     if CREATION_DATE_KEY not in m:
-        sourcefilename = m["SourceFile"]
         logging.debug("no EXIF creation date for {}, using mtime.".format(sourcefilename))
         st = os.stat(sourcefilename)
         timestruct = time.localtime(st.st_mtime)
@@ -86,10 +85,13 @@ def filename_from_metadata(m):
     sourcefilename = m["SourceFile"]
     basename = os.path.basename(sourcefilename)
     base, extension = os.path.splitext(basename)
-    timestruct = timestruct_from_metadata(m)
     extension = extension.lower()
+    timestruct = timestruct_from_metadata(m, sourcefilename)
     filename = time.strftime("%Y-%B-%d_%H_%M_%S", timestruct)
-    return "{}-{}{}".format(filename, base, extension)
+    if basename.startswith(filename):
+        return basename
+    else:
+        return "{}-{}{}".format(filename, base, extension)
 
 
 def import_files(filenames):
@@ -102,14 +104,21 @@ def import_files(filenames):
     skip_count = 0
     for filename in filenames:
         try:
-            cmd = "git-annex import '{}'".format(filename)
-            out = subprocess.check_output(cmd, shell=True,
-                                          stderr=subprocess.STDOUT,
-                                          env=os.environ) # TODO: hack for PATH
-            import_count += 1
             logging.debug("importing {}".format(filename))
+
+            if os.path.islink(filename): # Already imported: symlink to annex object
+                logging.debug("- skipping (symlink) file.")
+                skip_count += 1
+            else:
+                cmd = "git-annex import '{}'".format(filename) if USE_STAGING else "git-annex add '{}'".format(filename)
+                out = subprocess.check_output(cmd, shell=True,
+                                              stderr=subprocess.STDOUT,
+                                              encoding='utf8',
+                                              env=os.environ) # TODO: hack for PATH
+                import_count += 1
+                logging.debug("- success")
             if opts.verbose:
-                show_status(import_count, len(filenames), " ({} skips)".format(skip_count))
+                show_status(import_count, len(filenames), " ({} skips) ".format(skip_count))
 
         except subprocess.CalledProcessError as e:
             if e.returncode == 1 and "not overwriting existing" in e.output:
@@ -276,7 +285,7 @@ def get_metadata_using_exifread(filenames, opts):
             mlist.append(m)
             files_processed += 1
             if opts.verbose:
-                show_status(files_processed, len(filenames))
+                show_status(files_processed, len(filenames), " ({}) ".format(fn))
     return mlist
 
 
@@ -355,13 +364,17 @@ def main(opts):
         filename_for_git_annex = os.path.join(staging_dir, m["filename_for_git_annex"])
 
         if USE_STAGING:
-            infostr = "copying {} to {}".format(source_file_name, filename_for_git_annex)
+            infostr = "copying {} to {} ".format(source_file_name, filename_for_git_annex)
             logging.debug(infostr)
             shutil.copy2(source_file_name, filename_for_git_annex)
         else:
-            infostr = "moving {} to {}".format(source_file_name, filename_for_git_annex)
+            infostr = "moving {} to {} ".format(source_file_name, filename_for_git_annex)
             logging.debug(infostr)
-            shutil.move(source_file_name, filename_for_git_annex)
+            if os.path.abspath(source_file_name) != os.path.abspath(filename_for_git_annex) \
+            and os.path.islink(source_file_name): # Already imported: symlink to annex object
+                subprocess.check_output(["git", "mv", source_file_name, filename_for_git_annex])
+            else:
+                shutil.move(source_file_name, filename_for_git_annex)
 
         moved_count += 1
         if opts.verbose:
@@ -378,7 +391,7 @@ def main(opts):
     logging.info("\nUpdating metadata")
     updated_count = 0
     for m in mlist:
-        ts = timestruct_from_metadata(m)
+        ts = timestruct_from_metadata(m, m["SourceFile"] if USE_STAGING else m["filename_for_git_annex"])
 
         m.update(dict(Year=ts.tm_year,
                   Month=ts.tm_mon,
@@ -389,8 +402,9 @@ def main(opts):
 
         add_metadata_to_imported_file(m)
         updated_count += 1
+
         if opts.verbose:
-            show_status(updated_count, len(mlist))
+            show_status(updated_count, len(mlist), "({}) ".format(m['SourceFile']))
 
 
     if staging_dir != "":
