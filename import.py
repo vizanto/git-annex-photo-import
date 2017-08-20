@@ -15,8 +15,8 @@ import time
 import exifread
 USE_EXIFREAD = True
 
-#from urllib.request import urlopen
-from urllib import urlopen
+from urllib.request import urlopen
+# from urllib import urlopen
 
 #TODO py3.3 uses shlex.quote
 from pipes import quote
@@ -267,7 +267,7 @@ def get_metadata_using_exifread(filenames, opts):
     mlist = []
     files_processed = 0
     for fn in filenames:
-        with open(fn) as f:
+        with open(fn, 'rb') as f:
             # details = false to avoid parsing thumbs for now:
             m = exifread.process_file(f, 'unknown', details=False)
             m["SourceFile"] = os.path.abspath(fn)
@@ -310,7 +310,7 @@ def main(opts):
 
     if USE_STAGING:
         staging_dir = os.getenv("STAGING_DIR")
-        staging_dir = os.path.abspath(staging_dir)
+        staging_dir = os.path.abspath(staging_dir) if staging_dir else None
         if not staging_dir:
             staging_dir = tempfile.mkdtemp("git-annex-import", dir="/tmp")
         if not os.path.exists(staging_dir):
