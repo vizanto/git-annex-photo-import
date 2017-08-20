@@ -86,8 +86,8 @@ def filename_from_metadata(m):
     sourcefilename = m["SourceFile"]
     basename = os.path.basename(sourcefilename)
     base, extension = os.path.splitext(basename)
-    extension = extension.upper()
     timestruct = timestruct_from_metadata(m)
+    extension = extension.lower()
     filename = time.strftime("%Y-%B-%d_%H_%M_%S", timestruct)
     return "{}-{}{}".format(filename, base, extension)
 
